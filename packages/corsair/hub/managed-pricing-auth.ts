@@ -271,6 +271,19 @@ export async function resolveManagedPricingApiKey(
 	return (await resolveManagedPricingCall(ctx, input)).apiKey;
 }
 
+// unknown: a thrown value can be anything. String() itself throws for some
+// (an object without a prototype), and the report must never replace the
+// caller's own error.
+function describeThrown(error: unknown): string {
+	try {
+		return error instanceof Error
+			? `${error.name}: ${error.message}`
+			: String(error);
+	} catch {
+		return 'Unprintable thrown value';
+	}
+}
+
 /** How long the end of a call waits on its report. A report that does not
  *  arrive leaves the charge in place, which is what happened before. */
 const OUTCOME_REPORT_TIMEOUT_MS = 3_000;
@@ -283,10 +296,10 @@ const OUTCOME_REPORT_TIMEOUT_MS = 3_000;
 export async function reportManagedPricingCallFailed(
 	hub: HubConfig,
 	call: ManagedPricingCall,
+	// unknown: a thrown value can be anything, not only an Error.
 	error: unknown,
 ): Promise<void> {
-	const reason =
-		error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+	const reason = describeThrown(error);
 	try {
 		await hubApiPost({
 			hub,
