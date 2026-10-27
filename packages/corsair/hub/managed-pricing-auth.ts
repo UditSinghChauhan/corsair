@@ -42,6 +42,8 @@ export type ManagedPricingApiKeyResult = {
 	apiKey: string;
 	expiresAt: number | null;
 	fromCache: boolean;
+	/** Where the result says how much the call used, for a per-unit price. */
+	usagePath?: string;
 };
 
 type CachedManagedPricingCredential = {
@@ -199,6 +201,7 @@ export async function getManagedPricingApiKey(
 			apiKey: response.api_key,
 			expiresAt,
 			fromCache: false,
+			...(response.usage_path ? { usagePath: response.usage_path } : {}),
 		};
 	});
 }
@@ -228,7 +231,7 @@ export type ManagedPricingCall = {
 export async function resolveManagedPricingCall(
 	ctx: ManagedPricingKeyBuilderContext,
 	input: { plugin: string; cache: object; operation?: string },
-): Promise<{ apiKey: string; call: ManagedPricingCall }> {
+): Promise<{ apiKey: string; call: ManagedPricingCall; usagePath?: string }> {
 	requireHubForManagedPricing(input.plugin, ctx.hub);
 	const tenantId = ctx.tenantId?.trim();
 	if (!tenantId) {
@@ -261,6 +264,7 @@ export async function resolveManagedPricingCall(
 	return {
 		apiKey: result.apiKey,
 		call: { plugin: input.plugin, tenantId, operation, idempotencyKey },
+		...(result.usagePath ? { usagePath: result.usagePath } : {}),
 	};
 }
 
@@ -325,5 +329,48 @@ export async function reportManagedPricingCallFailed(
 		});
 	} catch {
 		// Unreported means still charged: the behaviour before this report.
+	}
+}
+
+/**
+ * The number at a dot path in an endpoint's result, if it is a usable count:
+ * finite and not negative. Anything else reads as nothing, and the call keeps
+ * the price Hub held for it.
+ */
+export function readUsageUnits(
+	// unknown: endpoint results differ per plugin; only the path is known.
+	result: unknown,
+	path: string,
+): number | undefined {
+	let node: unknown = result;
+	for (const key of path.split('.')) {
+		if (!node || typeof node !== 'object') return undefined;
+		node = (node as Record<string, unknown>)[key];
+	}
+	return typeof node === 'number' && Number.isFinite(node) && node >= 0
+		? node
+		: undefined;
+}
+
+/**
+ * Tells Hub what a per-unit call used, so it charges for that instead of the
+ * hold. Best effort and bounded like the failure report: an unsent report
+ * leaves the hold as the price.
+ */
+export async function reportManagedPricingCallUsage(
+	hub: HubConfig,
+	call: ManagedPricingCall,
+	units: number,
+): Promise<void> {
+	try {
+		await hubApiPost({
+			hub,
+			path: '/managed-pricing/usage/outcome',
+			body: { ...call, outcome: 'succeeded', usage: { units } },
+			parseResponse: (payload) => payload,
+			signal: AbortSignal.timeout(OUTCOME_REPORT_TIMEOUT_MS),
+		});
+	} catch {
+		// Unreported means the hold stands.
 	}
 }
