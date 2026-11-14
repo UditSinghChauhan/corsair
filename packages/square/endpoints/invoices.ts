@@ -169,7 +169,6 @@ export const search: SquareEndpoints['invoicesSearch'] = async (
 	const input = SquareEndpointInputSchemas.invoicesSearch.parse(rawInput);
 	return callSquare(ctx, '/v2/invoices/search', {
 		method: 'POST',
-		readOnly: true,
 		body: input,
 		output: SquareEndpointOutputSchemas.invoicesSearch,
 		event: 'invoices.search',

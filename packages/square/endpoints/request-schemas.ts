@@ -9,6 +9,10 @@ import { z } from 'zod';
 // unknown: Square types this object as free-form (no properties in the spec).
 const FreeForm = z.record(z.string(), z.unknown());
 
+// unknown: the spec gives these values no type (CustomAttribute.value), so they
+// are any JSON value. Square checks one against the attribute definition's schema.
+const JsonValue = z.json();
+
 // unknown: the spec points at these types but never defines them.
 const UnspecifiedObject = z.record(z.string(), z.unknown());
 
@@ -86,7 +90,7 @@ export const CustomAttributeSchema = z.object({
 			'The identifier of the custom attribute definition and its corresponding custom attributes.',
 		)
 		.optional(),
-	value: FreeForm.nullable()
+	value: JsonValue.nullable()
 		.describe(
 			"The value assigned to the custom attribute. It is validated against the custom attribute definition's schema on write operations.",
 		)
@@ -6445,7 +6449,48 @@ export const PublishInvoiceRequestSchema = z.object({
 		.optional(),
 });
 
-export const InvoicePaymentRequestSchema = z.object({
+export const InvoicePaymentReminderForUpdateSchema = z.object({
+	uid: z
+		.string()
+		.describe(
+			'A Square-assigned ID that uniquely identifies the reminder within the `InvoicePaymentRequest`.',
+		)
+		.optional(),
+	relative_scheduled_days: z
+		.number()
+		.int()
+		.min(-32767)
+		.max(32767)
+		.nullable()
+		.describe(
+			'The number of days before (a negative number) or after (a positive number) the payment request `due_date` when the reminder is sent.',
+		)
+		.optional(),
+	message: z
+		.string()
+		.min(1)
+		.max(1000)
+		.nullable()
+		.describe('The reminder message.')
+		.optional(),
+	status: InvoicePaymentReminderStatusSchema.describe(
+		'The status of the reminder. See InvoicePaymentReminderStatus for possible values',
+	).optional(),
+	sent_at: z
+		.string()
+		.describe(
+			'If sent, the timestamp when the reminder was sent, in RFC 3339 format.',
+		)
+		.optional(),
+	remove: z
+		.boolean()
+		.describe(
+			"Set to true, with this reminder's uid, to remove it from the invoice. From Square's Update an Invoice guide; the OpenAPI spec does not list it.",
+		)
+		.optional(),
+});
+
+export const InvoicePaymentRequestForUpdateSchema = z.object({
 	uid: z
 		.string()
 		.min(1)
@@ -6494,7 +6539,7 @@ export const InvoicePaymentRequestSchema = z.object({
 		)
 		.optional(),
 	reminders: z
-		.array(InvoicePaymentReminderSchema)
+		.array(InvoicePaymentReminderForUpdateSchema)
 		.nullable()
 		.describe(
 			'A list of one or more reminders to send for the payment request.',
@@ -6509,9 +6554,15 @@ export const InvoicePaymentRequestSchema = z.object({
 	rounding_adjustment_included_money: MoneySchema.describe(
 		'If the most recent payment was a cash payment in a currency that rounds cash payments (such as, `CAD` or `AUD`) and the payment is rounded from `computed_amount_money` in the paym…',
 	).optional(),
+	remove: z
+		.boolean()
+		.describe(
+			"Set to true, with this payment request's uid, to remove it from the invoice. From Square's Update an Invoice guide; the OpenAPI spec does not list it.",
+		)
+		.optional(),
 });
 
-export const InvoiceSchema = z.object({
+export const InvoiceForUpdateSchema = z.object({
 	id: z.string().describe('The Square-assigned ID of the invoice.').optional(),
 	version: z
 		.number()
@@ -6540,7 +6591,7 @@ export const InvoiceSchema = z.object({
 		'The customer who receives the invoice. This customer data is displayed on the invoice and used by Square to deliver the invoice.',
 	).optional(),
 	payment_requests: z
-		.array(InvoicePaymentRequestSchema)
+		.array(InvoicePaymentRequestForUpdateSchema)
 		.nullable()
 		.describe(
 			'The payment schedule for the invoice, represented by one or more payment requests that define payment settings, such as amount due and due date.',
@@ -6662,8 +6713,8 @@ export const InvoiceSchema = z.object({
 		.optional(),
 });
 
-export const UpdateInvoiceRequestSchema = z.object({
-	invoice: InvoiceSchema.describe(
+export const UpdateInvoiceRequestForUpdateSchema = z.object({
+	invoice: InvoiceForUpdateSchema.describe(
 		'The invoice fields to add, change, or clear. Fields can be cleared using null values or the `remove` field (for individual payment requests or reminders).',
 	),
 	idempotency_key: z

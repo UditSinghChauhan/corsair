@@ -4,6 +4,7 @@ import {
 	squareAuthConfig,
 	squareEndpointMeta,
 	squareEndpointSchemas,
+	squareReplayableOperations,
 } from './index';
 
 // unknown: only the function's existence is checked, not what it returns.
@@ -22,7 +23,8 @@ const plugin = square();
 const meta = squareEndpointMeta;
 const paths = endpointPaths(plugin.endpoints ?? {}).sort();
 
-const DESTRUCTIVE = [
+// Deletes and ends: no way back through the API.
+const IRREVERSIBLE = [
 	'cards.disable',
 	'catalog.delete',
 	'customAttributeDefinitions.customer.delete',
@@ -49,6 +51,20 @@ const DESTRUCTIVE = [
 	'webhookSubscriptions.delete',
 ];
 
+// R8: an operation that spends money, sends a message or can't be undone is
+// destructive. These six have a way back (a refund, a cancel, a new key), so
+// they are destructive without being irreversible.
+const DESTRUCTIVE_WITH_UNDO = [
+	'invoices.publish',
+	'orders.pay',
+	'payments.complete',
+	'payments.create',
+	'payments.update',
+	'webhookSubscriptions.test',
+] as const;
+
+const DESTRUCTIVE = [...IRREVERSIBLE, ...DESTRUCTIVE_WITH_UNDO].sort();
+
 const MONEY_MOVING = [
 	'disputes.accept',
 	'invoices.publish',
@@ -59,7 +75,7 @@ const MONEY_MOVING = [
 	'payments.create',
 	'payments.refund',
 	'payments.update',
-];
+] as const;
 
 type Node = z.core.$ZodType;
 
@@ -152,8 +168,9 @@ describe('Square plugin definition', () => {
 
 	it('classifies operations as the API inventory does', () => {
 		expect(by('read')).toHaveLength(56);
-		expect(by('write')).toHaveLength(43);
+		expect(by('write')).toHaveLength(37);
 		expect(by('destructive')).toEqual(DESTRUCTIVE);
+		expect(DESTRUCTIVE).toHaveLength(30);
 	});
 
 	it('marks irreversible only destructive operations', () => {
@@ -161,7 +178,10 @@ describe('Square plugin definition', () => {
 			.filter(([, entry]) => 'irreversible' in entry && entry.irreversible)
 			.map(([op]) => op)
 			.sort();
-		expect(irreversible).toEqual(DESTRUCTIVE);
+		expect(irreversible).toEqual(IRREVERSIBLE);
+		for (const op of DESTRUCTIVE_WITH_UNDO) {
+			expect('irreversible' in meta[op]).toBe(false);
+		}
 		// Each has a way back, so it is a write.
 		expect(meta['customers.removeGroup'].riskLevel).toBe('write');
 		expect('irreversible' in meta['customers.addGroup']).toBe(false);
@@ -178,6 +198,10 @@ describe('Square plugin definition', () => {
 			.map(([op]) => op)
 			.sort();
 		expect(saying).toEqual(MONEY_MOVING);
+		// R8: spending money is destructive.
+		for (const op of MONEY_MOVING) {
+			expect(meta[op].riskLevel).toBe('destructive');
+		}
 		// Storing a card moves nothing; later charges are payments.create.
 		expect(meta['cards.create'].riskLevel).toBe('write');
 	});
@@ -226,9 +250,26 @@ describe('Square plugin definition', () => {
 			'cards.create',
 			'catalog.upsert',
 			'disputes.createEvidenceText',
+			'disputes.createEvidenceFile',
 		] as const) {
 			expect(meta[op].description).toContain('idempotency_key');
 		}
+	});
+
+	it('replays after a 5xx only reads and the operations whose input requires idempotency_key', () => {
+		const keyRequired = Object.entries(squareEndpointSchemas)
+			.filter(
+				([, { input }]) =>
+					input !== undefined &&
+					isOptional(fieldAt(input, ['idempotency_key'])) === false,
+			)
+			.map(([op]) => op);
+		// The two upload operations carry the key in their JSON request part.
+		expect(keyRequired).toContain('disputes.createEvidenceFile');
+		expect(keyRequired).toHaveLength(9);
+		expect([...squareReplayableOperations].sort()).toEqual(
+			[...by('read'), ...keyRequired].sort(),
+		);
 	});
 
 	it('requires the fields only creating needs on create operations, and on no others', () => {

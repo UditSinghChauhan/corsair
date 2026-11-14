@@ -23,7 +23,6 @@ export const search: SquareEndpoints['catalogSearch'] = async (
 	const input = SquareEndpointInputSchemas.catalogSearch.parse(rawInput ?? {});
 	return callSquare(ctx, '/v2/catalog/search', {
 		method: 'POST',
-		readOnly: true,
 		body: input,
 		output: SquareEndpointOutputSchemas.catalogSearch,
 		event: 'catalog.search',

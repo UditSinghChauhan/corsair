@@ -13,7 +13,6 @@ export const bulkGet: SquareEndpoints['channelsBulkGet'] = async (
 	const input = SquareEndpointInputSchemas.channelsBulkGet.parse(rawInput);
 	return callSquare(ctx, '/v2/channels/bulk-retrieve', {
 		method: 'POST',
-		readOnly: true,
 		body: input,
 		output: SquareEndpointOutputSchemas.channelsBulkGet,
 		event: 'channels.bulkGet',

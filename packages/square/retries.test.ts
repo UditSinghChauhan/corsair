@@ -1,4 +1,5 @@
-import { SquareAPIError } from './client';
+import { ApiError } from 'corsair/http';
+import { SquareNetworkError, squareErrors } from './client';
 import {
 	createClient,
 	jsonBody,
@@ -37,6 +38,7 @@ const charge = {
 	idempotency_key: KEY,
 	amount_money: { amount: 1000, currency: 'USD' as const },
 };
+const hello = Buffer.from('hello, world\n').toString('base64');
 
 let fetchMock: jest.SpyInstance;
 
@@ -71,7 +73,137 @@ function bodies(): unknown[] {
 	);
 }
 
-describe('Square retry safety through createCorsair', () => {
+/** The JSON `request` part of each multipart upload fetch saw, in order. */
+// unknown: the parsed JSON of each part; the assertions compare it.
+function uploadRequests(): unknown[] {
+	return fetchMock.mock.calls.map((_, i) => {
+		const { body } = sentRequest(fetchMock, i);
+		if (!(body instanceof FormData)) throw new Error('expected FormData');
+		return JSON.parse(String(body.get('request')));
+	});
+}
+
+/** Runs `call` to the end with fake timers and returns what it rejected with. */
+// unknown: a rejection can carry any value; each test narrows it.
+async function failure(call: () => Promise<unknown>): Promise<unknown> {
+	jest.useFakeTimers();
+	const settled = call().then(
+		() => {
+			throw new Error('expected the call to fail');
+		},
+		// unknown: as above, whatever the call rejected with.
+		(error: unknown) => error,
+	);
+	await jest.advanceTimersByTimeAsync(30_000);
+	return settled;
+}
+
+describe('Square errors reach the caller as core’s ApiError', () => {
+	it('keeps the status and Square’s errors[] of a declined card, and does not retry it', async () => {
+		await withClient(async ({ corsair }) => {
+			fetchMock.mockResolvedValueOnce(jsonResponse(declined, 402));
+
+			const error = await corsair.square.api.payments
+				.create(charge)
+				// unknown: a rejection can carry any value; the checks below narrow it.
+				.catch((e: unknown) => e);
+
+			expect(error).toBeInstanceOf(ApiError);
+			expect(error).toMatchObject({ status: 402, body: declined });
+			expect(squareErrors(error)).toEqual(declined.errors);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it.each([401, 403])('does not retry a %i', async (status) => {
+		await withClient(async ({ corsair }) => {
+			fetchMock.mockResolvedValueOnce(
+				jsonResponse(
+					{
+						errors: [
+							{ category: 'AUTHENTICATION_ERROR', code: 'UNAUTHORIZED' },
+						],
+					},
+					status,
+				),
+			);
+			const error = await corsair.square.api.locations
+				.list({})
+				// unknown: a rejection can carry any value; the checks below narrow it.
+				.catch((e: unknown) => e);
+			expect(error).toBeInstanceOf(ApiError);
+			expect(error).toMatchObject({ status });
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it('names a dropped connection as a network failure and keeps the cause', async () => {
+		await withClient(async ({ corsair }) => {
+			const dropped = new TypeError('fetch failed');
+			fetchMock.mockRejectedValue(dropped);
+
+			const error = await failure(() =>
+				corsair.square.api.customers.create({ given_name: 'Ada' }),
+			);
+
+			expect(error).toBeInstanceOf(SquareNetworkError);
+			expect(error).toMatchObject({ cause: dropped });
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+	});
+});
+
+describe('Square 429: core’s request() retries it, the plugin does not', () => {
+	it('resends a keyless POST after a 429: Square rejected it, it did not run', async () => {
+		await withClient(async ({ corsair }) => {
+			jest.useFakeTimers();
+			fetchMock
+				.mockResolvedValueOnce(jsonResponse(rateLimited, 429))
+				.mockResolvedValueOnce(jsonResponse({ customer: { id: 'C1' } }));
+
+			const pending = corsair.square.api.customers.create({
+				given_name: 'Ada',
+			});
+			await jest.advanceTimersByTimeAsync(10_000);
+
+			await expect(pending).resolves.toEqual({ customer: { id: 'C1' } });
+			expect(bodies()).toEqual([{ given_name: 'Ada' }, { given_name: 'Ada' }]);
+		});
+	});
+
+	it('gives up after core’s 3 retries: 4 requests in all, not 4 per handler retry', async () => {
+		await withClient(async ({ corsair }) => {
+			fetchMock.mockImplementation(async () => jsonResponse(rateLimited, 429));
+
+			const error = await failure(() => corsair.square.api.customers.list({}));
+
+			expect(error).toBeInstanceOf(ApiError);
+			expect(error).toMatchObject({ status: 429 });
+			expect(fetchMock).toHaveBeenCalledTimes(4);
+		});
+	});
+
+	it('waits for Retry-After when Square sends one', async () => {
+		await withClient(async ({ corsair }) => {
+			jest.useFakeTimers();
+			fetchMock
+				.mockResolvedValueOnce(
+					jsonResponse(rateLimited, 429, { 'Retry-After': '5' }),
+				)
+				.mockResolvedValueOnce(jsonResponse({ locations: [] }));
+
+			const pending = corsair.square.api.locations.list({});
+			await jest.advanceTimersByTimeAsync(4_900);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			await jest.advanceTimersByTimeAsync(200);
+
+			await expect(pending).resolves.toEqual({ locations: [] });
+			expect(fetchMock).toHaveBeenCalledTimes(2);
+		});
+	});
+});
+
+describe('Square 5xx and network failures: replayed only for reads and required-key operations', () => {
 	it('resends payments.create with the same idempotency_key after a 500', async () => {
 		await withClient(async ({ corsair }) => {
 			jest.useFakeTimers();
@@ -103,93 +235,132 @@ describe('Square retry safety through createCorsair', () => {
 		});
 	});
 
-	it('does not resend a keyless customers.create after a 500: it may have run', async () => {
-		await withClient(async ({ corsair }) => {
-			jest.useFakeTimers();
-			fetchMock.mockResolvedValue(jsonResponse(serverError, 500));
-
-			const pending = corsair.square.api.customers.create({
-				given_name: 'Ada',
-			});
-			const settled = expect(pending).rejects.toMatchObject({
-				name: 'SquareAPIError',
-				status: 500,
-			});
-			await jest.advanceTimersByTimeAsync(10_000);
-			await settled;
-
-			expect(fetchMock).toHaveBeenCalledTimes(1);
-		});
-	});
-
-	it('resends a keyless POST after a 429: Square rejected it, it did not run', async () => {
+	it('resends a dispute evidence upload with the same key in its request part', async () => {
 		await withClient(async ({ corsair }) => {
 			jest.useFakeTimers();
 			fetchMock
-				.mockResolvedValueOnce(jsonResponse(rateLimited, 429))
-				.mockResolvedValueOnce(jsonResponse({ customer: { id: 'C1' } }));
+				.mockResolvedValueOnce(jsonResponse(serverError, 500))
+				.mockResolvedValueOnce(jsonResponse({ evidence: { id: 'E1' } }));
 
-			const pending = corsair.square.api.customers.create({
-				given_name: 'Ada',
+			const pending = corsair.square.api.disputes.createEvidenceFile({
+				dispute_id: 'D1',
+				idempotency_key: 'evidence-1',
+				content_type: 'image/png',
+				file_base64: hello,
+				filename: 'receipt.png',
 			});
 			await jest.advanceTimersByTimeAsync(10_000);
 
-			await expect(pending).resolves.toEqual({ customer: { id: 'C1' } });
-			expect(bodies()).toEqual([{ given_name: 'Ada' }, { given_name: 'Ada' }]);
+			await expect(pending).resolves.toEqual({ evidence: { id: 'E1' } });
+			const expected = {
+				idempotency_key: 'evidence-1',
+				content_type: 'image/png',
+			};
+			expect(uploadRequests()).toEqual([expected, expected]);
 		});
 	});
 
-	it('gives up on a 429 after 3 retries: 4 requests in all, not 4 per try', async () => {
+	it('does not resend an invoice attachment after a 500: its key is optional', async () => {
+		await withClient(async ({ corsair }) => {
+			fetchMock.mockResolvedValue(jsonResponse(serverError, 500));
+
+			const error = await failure(() =>
+				corsair.square.api.invoices.createAttachment({
+					invoice_id: 'INV1',
+					idempotency_key: 'attachment-1',
+					content_type: 'image/png',
+					file_base64: hello,
+					filename: 'receipt.png',
+				}),
+			);
+
+			expect(error).toMatchObject({ status: 500 });
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it('does not resend a keyless customers.create after a 500: it may have run', async () => {
+		await withClient(async ({ corsair }) => {
+			fetchMock.mockResolvedValue(jsonResponse(serverError, 500));
+
+			const error = await failure(() =>
+				corsair.square.api.customers.create({ given_name: 'Ada' }),
+			);
+
+			expect(error).toBeInstanceOf(ApiError);
+			expect(error).toMatchObject({ status: 500, body: serverError });
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it('does not resend a write whose optional key the caller passed', async () => {
+		await withClient(async ({ corsair }) => {
+			fetchMock.mockResolvedValue(jsonResponse(serverError, 503));
+
+			await failure(() =>
+				corsair.square.api.customers.create({
+					given_name: 'Ada',
+					idempotency_key: 'customer-ada',
+				}),
+			);
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it('does not resend a DELETE after a 500', async () => {
+		await withClient(async ({ corsair }) => {
+			fetchMock.mockResolvedValue(jsonResponse(serverError, 500));
+
+			await failure(() =>
+				corsair.square.api.customers.delete({ customer_id: 'C1' }),
+			);
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it('does not resend a PUT after a 500', async () => {
+		await withClient(async ({ corsair }) => {
+			fetchMock.mockResolvedValue(jsonResponse(serverError, 500));
+
+			await failure(() =>
+				corsair.square.api.customers.update({
+					customer_id: 'C1',
+					given_name: 'Ada',
+				}),
+			);
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it('does not resend a keyless write after the connection drops', async () => {
+		await withClient(async ({ corsair }) => {
+			fetchMock.mockRejectedValue(new TypeError('fetch failed'));
+
+			await failure(() =>
+				corsair.square.api.orders.create({
+					order: { location_id: 'L1' },
+				}),
+			);
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it('resends a GET after a 503', async () => {
 		await withClient(async ({ corsair }) => {
 			jest.useFakeTimers();
-			fetchMock.mockImplementation(async () => jsonResponse(rateLimited, 429));
+			fetchMock
+				.mockResolvedValueOnce(jsonResponse(serverError, 503))
+				.mockResolvedValueOnce(jsonResponse({ locations: [] }));
 
-			const pending = corsair.square.api.customers.list({});
-			const settled = expect(pending).rejects.toMatchObject({ status: 429 });
-			await jest.advanceTimersByTimeAsync(30_000);
-			await settled;
+			const pending = corsair.square.api.locations.list({});
+			await jest.advanceTimersByTimeAsync(10_000);
 
-			expect(fetchMock).toHaveBeenCalledTimes(4);
-		});
-	});
-
-	it('does not retry a declined card, and says why', async () => {
-		await withClient(async ({ corsair }) => {
-			fetchMock.mockResolvedValueOnce(jsonResponse(declined, 402));
-
-			const error = await corsair.square.api.payments
-				.create(charge)
-				// unknown: a rejection can carry any value; the checks below narrow it.
-				.catch((e: unknown) => e);
-
-			expect(error).toBeInstanceOf(SquareAPIError);
-			expect(error).toMatchObject({ status: 402 });
-			expect(error instanceof Error ? error.message : '').toBe(
-				'CARD_DECLINED: Card declined. (source_id)',
-			);
-			expect(fetchMock).toHaveBeenCalledTimes(1);
-		});
-	});
-
-	it.each([401, 403])('does not retry a %i', async (status) => {
-		await withClient(async ({ corsair }) => {
-			fetchMock.mockResolvedValueOnce(
-				jsonResponse(
-					{
-						errors: [
-							{ category: 'AUTHENTICATION_ERROR', code: 'UNAUTHORIZED' },
-						],
-					},
-					status,
-				),
-			);
-			await expect(corsair.square.api.locations.list({})).rejects.toMatchObject(
-				{
-					name: 'SquareAPIError',
-					status,
-				},
-			);
-			expect(fetchMock).toHaveBeenCalledTimes(1);
+			await expect(pending).resolves.toEqual({ locations: [] });
+			expect(fetchMock).toHaveBeenCalledTimes(2);
 		});
 	});
 
@@ -210,18 +381,13 @@ describe('Square retry safety through createCorsair', () => {
 		});
 	});
 
-	it('resends a keyless DELETE after a 500', async () => {
+	it('gives a read 3 attempts in all after repeated 500s', async () => {
 		await withClient(async ({ corsair }) => {
-			jest.useFakeTimers();
-			fetchMock
-				.mockResolvedValueOnce(jsonResponse(serverError, 500))
-				.mockResolvedValueOnce(jsonResponse({}));
-			const pending = corsair.square.api.customers.delete({
-				customer_id: 'C1',
-			});
-			await jest.advanceTimersByTimeAsync(10_000);
-			await expect(pending).resolves.toEqual({});
-			expect(fetchMock).toHaveBeenCalledTimes(2);
+			fetchMock.mockImplementation(async () => jsonResponse(serverError, 500));
+
+			await failure(() => corsair.square.api.locations.list({}));
+
+			expect(fetchMock).toHaveBeenCalledTimes(3);
 		});
 	});
 });

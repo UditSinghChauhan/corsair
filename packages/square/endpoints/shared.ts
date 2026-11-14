@@ -1,7 +1,7 @@
 import { logEventFromContext } from 'corsair/core';
 import type { z } from 'zod';
 import type { SquareRequestOptions } from '../client';
-import { makeAuthenticatedSquareRequest, SquareAPIError } from '../client';
+import { makeAuthenticatedSquareRequest } from '../client';
 import type { SquareContext } from '../index';
 
 type CallOptions<S extends z.ZodType> = Omit<
@@ -70,6 +70,7 @@ const UPLOAD_EXTENSIONS: Record<string, string> = {
  * `attachment` plus the extension of its type, if the type is a known one.
  */
 export function buildUploadForm(
+	// unknown: the upload's JSON fields, already parsed by its input schema.
 	request: Record<string, unknown>,
 	file: {
 		bytes: Uint8Array<ArrayBuffer>;
@@ -115,11 +116,11 @@ export function decodeBase64(
 		unpadded.length % 4 === 1 ||
 		(padded && data.length % 4 !== 0)
 	) {
-		throw new SquareAPIError(`${field} is not valid base64.`);
+		throw new Error(`${field} is not valid base64.`);
 	}
 	const bytes = Buffer.from(unpadded, 'base64');
 	if (bytes.length === 0) {
-		throw new SquareAPIError(`${field} decodes to an empty file.`);
+		throw new Error(`${field} decodes to an empty file.`);
 	}
 	return new Uint8Array(bytes);
 }

@@ -48,7 +48,7 @@ import {
 	UpdateCustomerCustomAttributeDefinitionRequestSchema as InUpdateCustomerCustomAttributeDefinitionRequestSchema,
 	UpdateCustomerGroupRequestSchema as InUpdateCustomerGroupRequestSchema,
 	UpdateCustomerRequestSchema as InUpdateCustomerRequestSchema,
-	UpdateInvoiceRequestSchema as InUpdateInvoiceRequestSchema,
+	UpdateInvoiceRequestForUpdateSchema as InUpdateInvoiceRequestForUpdateSchema,
 	UpdateLocationCustomAttributeDefinitionRequestSchema as InUpdateLocationCustomAttributeDefinitionRequestSchema,
 	UpdateLocationRequestSchema as InUpdateLocationRequestSchema,
 	UpdateLocationSettingsRequestSchema as InUpdateLocationSettingsRequestSchema,
@@ -1089,7 +1089,7 @@ export const SquareEndpointInputSchemas = {
 	invoicesPublish: InPublishInvoiceRequestSchema.extend({
 		invoice_id: z.string().describe('The ID of the invoice to publish.'),
 	}),
-	invoicesUpdate: InUpdateInvoiceRequestSchema.extend({
+	invoicesUpdate: InUpdateInvoiceRequestForUpdateSchema.extend({
 		invoice_id: z.string().describe('The ID of the invoice to update.'),
 	}),
 	invoicesSearch: InSearchInvoicesRequestSchema,

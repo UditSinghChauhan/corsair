@@ -5632,7 +5632,7 @@ Record<string, {
   customer_id: string,
   custom_attribute: {
     key?: string | null,
-    value?: Record<string, any> | null,
+    value?: JsonValue | null,
     version?: number,
     visibility?: VISIBILITY_HIDDEN | VISIBILITY_READ_ONLY | VISIBILITY_READ_WRITE_VALUES,
     definition?: {
@@ -5671,7 +5671,7 @@ Record<string, {
   customer_id?: string | null,
   custom_attribute?: {
     key?: string | null,
-    value?: Record<string, any> | null,
+    value?: JsonValue | null,
     version?: number | null,
     visibility?: string | null,
     definition?: {
@@ -5795,7 +5795,7 @@ await corsair.square.api.customAttributes.customer.get({ customer_id: '<customer
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number | null,
   visibility?: string | null,
   definition?: {
@@ -5868,7 +5868,7 @@ await corsair.square.api.customAttributes.customer.list({ customer_id: '<custome
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number | null,
   visibility?: string | null,
   definition?: {
@@ -5935,7 +5935,7 @@ await corsair.square.api.customAttributes.customer.upsert({
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number,
   visibility?: VISIBILITY_HIDDEN | VISIBILITY_READ_ONLY | VISIBILITY_READ_WRITE_VALUES,
   definition?: {
@@ -5970,7 +5970,7 @@ await corsair.square.api.customAttributes.customer.upsert({
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number | null,
   visibility?: string | null,
   definition?: {
@@ -6114,7 +6114,7 @@ Record<string, {
   location_id: string,
   custom_attribute: {
     key?: string | null,
-    value?: Record<string, any> | null,
+    value?: JsonValue | null,
     version?: number,
     visibility?: VISIBILITY_HIDDEN | VISIBILITY_READ_ONLY | VISIBILITY_READ_WRITE_VALUES,
     definition?: {
@@ -6153,7 +6153,7 @@ Record<string, {
   location_id?: string | null,
   custom_attribute?: {
     key?: string | null,
-    value?: Record<string, any> | null,
+    value?: JsonValue | null,
     version?: number | null,
     visibility?: string | null,
     definition?: {
@@ -6277,7 +6277,7 @@ await corsair.square.api.customAttributes.location.get({ location_id: '<location
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number | null,
   visibility?: string | null,
   definition?: {
@@ -6351,7 +6351,7 @@ await corsair.square.api.customAttributes.location.list({ location_id: '<locatio
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number | null,
   visibility?: string | null,
   definition?: {
@@ -6418,7 +6418,7 @@ await corsair.square.api.customAttributes.location.upsert({
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number,
   visibility?: VISIBILITY_HIDDEN | VISIBILITY_READ_ONLY | VISIBILITY_READ_WRITE_VALUES,
   definition?: {
@@ -6453,7 +6453,7 @@ await corsair.square.api.customAttributes.location.upsert({
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number | null,
   visibility?: string | null,
   definition?: {
@@ -6596,7 +6596,7 @@ Record<string, {
   merchant_id: string,
   custom_attribute: {
     key?: string | null,
-    value?: Record<string, any> | null,
+    value?: JsonValue | null,
     version?: number,
     visibility?: VISIBILITY_HIDDEN | VISIBILITY_READ_ONLY | VISIBILITY_READ_WRITE_VALUES,
     definition?: {
@@ -6635,7 +6635,7 @@ Record<string, {
   merchant_id?: string | null,
   custom_attribute?: {
     key?: string | null,
-    value?: Record<string, any> | null,
+    value?: JsonValue | null,
     version?: number | null,
     visibility?: string | null,
     definition?: {
@@ -6759,7 +6759,7 @@ await corsair.square.api.customAttributes.merchant.get({ merchant_id: '<merchant
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number | null,
   visibility?: string | null,
   definition?: {
@@ -6833,7 +6833,7 @@ await corsair.square.api.customAttributes.merchant.list({ merchant_id: '<merchan
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number | null,
   visibility?: string | null,
   definition?: {
@@ -6900,7 +6900,7 @@ await corsair.square.api.customAttributes.merchant.upsert({
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number,
   visibility?: VISIBILITY_HIDDEN | VISIBILITY_READ_ONLY | VISIBILITY_READ_WRITE_VALUES,
   definition?: {
@@ -6935,7 +6935,7 @@ await corsair.square.api.customAttributes.merchant.upsert({
 ```ts
 {
   key?: string | null,
-  value?: Record<string, any> | null,
+  value?: JsonValue | null,
   version?: number | null,
   visibility?: string | null,
   definition?: {
@@ -8686,7 +8686,7 @@ await corsair.square.api.disputes.accept({ dispute_id: '<dispute id>' });
 
 `disputes.createEvidenceFile`
 
-Uploads a file to use as evidence in a dispute challenge. The endpoint accepts HTTP multipart/form-data file uploads in HEIC, HEIF, JPEG, PDF, PNG, and TIFF formats.
+Uploads a file to use as evidence in a dispute challenge. The endpoint accepts HTTP multipart/form-data file uploads in HEIC, HEIF, JPEG, PDF, PNG, and TIFF formats. Requires idempotency_key; pass the same key to retry safely.
 
 **Risk:** `write`
 
@@ -9798,7 +9798,7 @@ await corsair.square.api.invoices.create({
 
 `invoices.createAttachment`
 
-Uploads a file and attaches it to an invoice. This endpoint accepts HTTP multipart/form-data file uploads with a JSON `request` part and a `file` part.
+Uploads a file and attaches it to an invoice. This endpoint accepts HTTP multipart/form-data file uploads with a JSON `request` part and a `file` part. Pass the same idempotency_key to retry safely.
 
 **Risk:** `write`
 
@@ -10276,7 +10276,7 @@ await corsair.square.api.invoices.list({ location_id: '<location id>', cursor: '
 
 Publishes the specified draft invoice. Sends the invoice to the customer and may charge the card on file; cancel with invoices.cancel. Pass the invoice's current version; every committed change, including adding or removing an attachment, increments it. Read it with invoices.get. Moves money. Pass the same idempotency_key to retry safely.
 
-**Risk:** `write`
+**Risk:** `destructive`
 
 ```ts
 await corsair.square.api.invoices.publish({ invoice_id: '<invoice id>', version: 0 });
@@ -10641,7 +10641,7 @@ await corsair.square.api.invoices.update({
 | `fields_to_clear` | `string[] \| null` | No | The list of fields to clear. Although this field is currently supported, we recommend using null values or the `remove` field when possible. For examples, see Update an Invoice. |
 | `invoice_id` | `string` | Yes | The ID of the invoice to update. |
 
-Needs the invoice's current `version` from `invoices.get`; every committed change, including adding or removing an attachment, increments it.
+Needs the invoice's current `version` from `invoices.get`; every committed change, including adding or removing an attachment, increments it. To remove a payment request or a reminder, send its `uid` with `remove: true` (Square's Update an Invoice guide).
 
 <AccordionGroup>
 <Accordion title="invoice full type">
@@ -10697,7 +10697,8 @@ Needs the invoice's current `version` from `invoices.get`; every committed chang
       relative_scheduled_days?: number | null,
       message?: string | null,
       status?: PENDING | NOT_APPLICABLE | SENT,
-      sent_at?: string
+      sent_at?: string,
+      remove?: boolean
     }[] | null,
     computed_amount_money?: {
       amount?: number | null,
@@ -10710,7 +10711,8 @@ Needs the invoice's current `version` from `invoices.get`; every committed chang
     rounding_adjustment_included_money?: {
       amount?: number | null,
       currency?: UNKNOWN_CURRENCY | AED | AFN | ALL | AMD | ANG | AOA | ARS | AUD | AWG | AZN | BAM | BBD | BDT | BGN | BHD | BIF | BMD | BND | BOB | BOV | BRL | BSD | BTN | BWP | BYR | BZD | CAD | CDF | CHE | CHF | CHW | CLF | CLP | CNY | COP | COU | CRC | CUC | CUP | CVE | CZK | DJF | DKK | DOP | DZD | EGP | ERN | ETB | EUR | FJD | FKP | GBP | GEL | GHS | GIP | GMD | GNF | GTQ | GYD | HKD | HNL | HRK | HTG | HUF | IDR | ILS | INR | IQD | IRR | ISK | JMD | JOD | JPY | KES | KGS | KHR | KMF | KPW | KRW | KWD | KYD | KZT | LAK | LBP | LKR | LRD | LSL | LTL | LVL | LYD | MAD | MDL | MGA | MKD | MMK | MNT | MOP | MRO | MUR | MVR | MWK | MXN | MXV | MYR | MZN | NAD | NGN | NIO | NOK | NPR | NZD | OMR | PAB | PEN | PGK | PHP | PKR | PLN | PYG | QAR | RON | RSD | RUB | RWF | SAR | SBD | SCR | SDG | SEK | SGD | SHP | SLL | SLE | SOS | SRD | SSP | STD | SVC | SYP | SZL | THB | TJS | TMT | TND | TOP | TRY | TTD | TWD | TZS | UAH | UGX | USD | USN | USS | UYI | UYU | UZS | VEF | VND | VUV | WST | XAF | XAG | XAU | XBA | XBB | XBC | XBD | XCD | XDR | XOF | XPD | XPF | XPT | XTS | XXX | YER | ZAR | ZMK | ZMW | BTC | XUS
-    }
+    },
+    remove?: boolean
   }[] | null,
   delivery_method?: EMAIL | SHARE_MANUALLY | SMS,
   invoice_number?: string | null,
@@ -15452,7 +15454,7 @@ await corsair.square.api.orders.get({ order_id: '<order id>' });
 
 Pay for an order using one or more approved payments or settle an order with a total of `0`. Approved payments for the same order_id that are not listed in payment_ids are canceled. Moves money. Pass the same idempotency_key to retry safely. Beta in Square's API; it may change.
 
-**Risk:** `write`
+**Risk:** `destructive`
 
 ```ts
 await corsair.square.api.orders.pay({
@@ -21346,7 +21348,7 @@ The `idempotency_key` here names the payment to cancel (the key of the `payments
 
 Completes (captures) a payment. By default, payments are set to complete immediately after they are created. Moves money. Square takes no idempotency_key here; payments.get shows whether the payment is already completed before you repeat the call.
 
-**Risk:** `write`
+**Risk:** `destructive`
 
 ```ts
 await corsair.square.api.payments.complete({ payment_id: '<payment id>' });
@@ -21669,7 +21671,7 @@ await corsair.square.api.payments.complete({ payment_id: '<payment id>' });
 
 Creates a payment using the provided source. customer_id is required if source_id is a card on file created with the Cards API. Moves money. Pass the same idempotency_key to retry safely.
 
-**Risk:** `write`
+**Risk:** `destructive`
 
 ```ts
 await corsair.square.api.payments.create({
@@ -23018,7 +23020,7 @@ Pass `payment_id` and `amount_money`. A refund cannot be reversed; use a new `id
 
 Updates a payment with the APPROVED status. You can update the `amount_money` and `tip_money` using this endpoint. Moves money. Pass the same idempotency_key to retry safely.
 
-**Risk:** `write`
+**Risk:** `destructive`
 
 ```ts
 await corsair.square.api.payments.update({ payment_id: '<payment id>', idempotency_key: '<idempotency key>' });
@@ -24235,7 +24237,7 @@ await corsair.square.api.webhookSubscriptions.list({ cursor: '<cursor>', limit: 
 
 Tests a webhook subscription by sending a test event to the notification URL.
 
-**Risk:** `write`
+**Risk:** `destructive`
 
 ```ts
 await corsair.square.api.webhookSubscriptions.test({ subscription_id: '<subscription id>' });

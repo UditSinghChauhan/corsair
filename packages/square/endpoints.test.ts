@@ -2592,6 +2592,107 @@ describe('Square request details', () => {
 			});
 		});
 
+		// Square's Update an Invoice guide: "specify the uid and include the remove
+		// field set to true". The OpenAPI spec does not list `remove`.
+		it('lets invoices.update remove a payment request and a reminder by uid', async () => {
+			fetchMock.mockResolvedValueOnce(
+				jsonResponse({ invoice: { id: 'INV1' } }),
+			);
+			const invoice = {
+				version: 2,
+				payment_requests: [
+					{ uid: 'deposit-uid', remove: true },
+					{
+						uid: 'balance-uid',
+						reminders: [{ uid: 'reminder-uid', remove: true }],
+					},
+				],
+			};
+			await api().invoices.update({ invoice_id: 'INV1', invoice });
+			expect(jsonBody(sentRequest(fetchMock))).toEqual({ invoice });
+		});
+
+		it('drops remove from invoices.create, which has nothing to remove', async () => {
+			fetchMock.mockResolvedValueOnce(
+				jsonResponse({ invoice: { id: 'INV1' } }),
+			);
+			// A variable, not a literal, so TypeScript allows the extra field.
+			const request = {
+				request_type: 'BALANCE' as const,
+				due_date: '2026-12-01',
+				remove: true,
+			};
+			await api().invoices.create({
+				invoice: {
+					order_id: 'O1',
+					payment_requests: [request],
+					accepted_payment_methods: { card: true },
+				},
+			});
+			expect(jsonBody(sentRequest(fetchMock))).toEqual({
+				invoice: {
+					order_id: 'O1',
+					payment_requests: [
+						{ request_type: 'BALANCE', due_date: '2026-12-01' },
+					],
+					accepted_payment_methods: { card: true },
+				},
+			});
+		});
+
+		// Square's spec gives CustomAttribute.value no type: it is any JSON value,
+		// checked by Square against the attribute definition's schema.
+		it.each([
+			['a string', 'Gold'],
+			['a number', 42],
+			['a boolean', true],
+			['a selection', ['5f2d4c1e-uid']],
+			['an address', { address_line_1: '1 Main St', locality: 'Austin' }],
+		])('upserts a value that is %s and reads it back', async (_kind, value) => {
+			fetchMock.mockResolvedValueOnce(
+				jsonResponse({ custom_attribute: { key: 'tier', value, version: 1 } }),
+			);
+			const out = await api().customAttributes.customer.upsert({
+				customer_id: 'C1',
+				key: 'tier',
+				custom_attribute: { value },
+			});
+			expect(jsonBody(sentRequest(fetchMock))).toEqual({
+				custom_attribute: { value },
+			});
+			expect(out.custom_attribute?.value).toEqual(value);
+		});
+
+		it('parses a list whose values are strings and numbers', async () => {
+			fetchMock.mockResolvedValueOnce(
+				jsonResponse({
+					custom_attributes: [
+						{ key: 'tier', value: 'Gold' },
+						{ key: 'visits', value: 7 },
+					],
+				}),
+			);
+			const out = await api().customAttributes.customer.list({
+				customer_id: 'C1',
+			});
+			expect(out.custom_attributes?.map((a) => a.value)).toEqual(['Gold', 7]);
+		});
+
+		it('refuses a value that is not JSON, before calling Square', async () => {
+			// endpoint() takes untyped input, as a caller without types would send it.
+			await expect(
+				endpoint(
+					api(),
+					'customAttributes.customer.upsert',
+				)({
+					customer_id: 'C1',
+					key: 'tier',
+					custom_attribute: { value: () => 1 },
+				}),
+			).rejects.toThrow();
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+
 		it.each(['customer', 'location', 'merchant'])(
 			'lets the %s attribute definition update send a partial definition',
 			async (kind) => {

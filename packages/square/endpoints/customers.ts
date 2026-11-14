@@ -130,7 +130,6 @@ export const bulkGet: SquareEndpoints['customersBulkGet'] = async (
 	const input = SquareEndpointInputSchemas.customersBulkGet.parse(rawInput);
 	return callSquare(ctx, '/v2/customers/bulk-retrieve', {
 		method: 'POST',
-		readOnly: true,
 		body: input,
 		output: SquareEndpointOutputSchemas.customersBulkGet,
 		event: 'customers.bulkGet',
@@ -158,7 +157,6 @@ export const search: SquareEndpoints['customersSearch'] = async (
 	);
 	return callSquare(ctx, '/v2/customers/search', {
 		method: 'POST',
-		readOnly: true,
 		body: input,
 		output: SquareEndpointOutputSchemas.customersSearch,
 		event: 'customers.search',

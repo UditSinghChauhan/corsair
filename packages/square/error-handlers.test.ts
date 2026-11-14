@@ -1,280 +1,194 @@
-import type { RetryStrategy } from 'corsair/core';
-import { makeSquareRequest, SquareAPIError } from './client';
-import { errorHandlers } from './error-handlers';
+import type { CorsairErrorHandler, RetryStrategy } from 'corsair/core';
+import { ApiError } from 'corsair/http';
+import { SquareNetworkError, squareErrors } from './client';
+import { square, squareReplayableOperations } from './index';
 
-// unknown: response bodies are arbitrary JSON, as Square sends them.
-function jsonResponse(
-	body: unknown,
-	status: number,
-	headers: Record<string, string> = {},
-): Response {
-	return new Response(JSON.stringify(body), {
-		status,
-		headers: { 'Content-Type': 'application/json', ...headers },
-	});
-}
+const handlers: CorsairErrorHandler = square().errorHandlers ?? {};
 
-const rateLimited = {
-	errors: [
-		{
-			category: 'RATE_LIMIT_ERROR',
-			code: 'RATE_LIMITED',
-			detail: 'Too many requests.',
-		},
-	],
-};
-const serverError = {
-	errors: [{ category: 'API_ERROR', code: 'INTERNAL_SERVER_ERROR' }],
-};
-
-let fetchMock: jest.SpyInstance;
-
-beforeEach(() => {
-	fetchMock = jest.spyOn(globalThis, 'fetch').mockImplementation(async () => {
-		throw new Error('unmocked fetch: queue a response first');
-	});
-});
-
-afterEach(() => {
-	jest.restoreAllMocks();
-});
-
-// Core picks the first handler (in key order) whose match passes.
-async function strategyFor(error: Error): Promise<RetryStrategy> {
-	const chosen = Object.values(errorHandlers).find((h) => h.match(error));
+/**
+ * Picks a handler the way core does (core/errors/handler.ts): the first named
+ * handler, in key order, whose match passes; DEFAULT only when none does.
+ */
+async function strategyFor(
+	error: Error,
+	operation: string,
+): Promise<RetryStrategy> {
+	const context = {
+		pluginId: 'square',
+		operation,
+		input: {},
+		originalError: error,
+	};
+	const name = Object.keys(handlers).find(
+		(key) => key !== 'DEFAULT' && handlers[key]?.match(error, context),
+	);
+	const chosen = handlers[name ?? 'DEFAULT'];
 	if (!chosen) throw new Error('no handler matched');
-	return chosen.handler(error);
+	return chosen.handler(error, context);
 }
 
 // unknown: the error body is arbitrary JSON, as Square sends it.
-async function failureOf(
-	status: number,
-	body: unknown,
-	options: Parameters<typeof makeSquareRequest>[2],
-	headers: Record<string, string> = {},
-): Promise<SquareAPIError> {
-	fetchMock.mockResolvedValueOnce(jsonResponse(body, status, headers));
-	const error = await makeSquareRequest('/v2/payments', 'tok', options).catch(
-		// unknown: a rejection can carry any value; the check below narrows it.
-		(e: unknown) => e,
+function apiError(status: number, body: unknown = {}): ApiError {
+	return new ApiError(
+		{ method: 'POST', url: '/v2/payments' },
+		{
+			url: 'https://connect.squareup.com/v2/payments',
+			ok: false,
+			status,
+			statusText: '',
+			body,
+		},
+		'Square said no',
 	);
-	if (!(error instanceof SquareAPIError)) throw new Error('expected a failure');
-	return error;
 }
 
-const keyed = {
-	method: 'POST',
-	body: { idempotency_key: 'order-17-charge', source_id: 'cnon:card-nonce-ok' },
-} as const;
-const keyless = {
-	method: 'POST',
-	body: { source_id: 'cnon:card-nonce-ok' },
-} as const;
+const serverError = apiError(500, {
+	errors: [{ category: 'API_ERROR', code: 'INTERNAL_SERVER_ERROR' }],
+});
+const dropped = new SquareNetworkError(new TypeError('fetch failed'));
 
-describe('Square retry policy on a 5xx', () => {
-	it('retries a POST that carries the caller idempotency_key', async () => {
-		const error = await failureOf(500, serverError, keyed);
-		expect(await strategyFor(error)).toMatchObject({ maxRetries: 2 });
-	});
-
-	it('never retries a keyless mutating POST', async () => {
-		const error = await failureOf(500, serverError, keyless);
-		expect(await strategyFor(error)).toEqual({ maxRetries: 0 });
-	});
-
-	it('does not count an empty idempotency_key as a key', async () => {
-		const error = await failureOf(500, serverError, {
-			method: 'POST',
-			body: { idempotency_key: '' },
+describe('Square retry policy on a 5xx or a dropped connection', () => {
+	it.each([
+		['payments.create', 'its spec requires idempotency_key'],
+		['payments.refund', 'its spec requires idempotency_key'],
+		['disputes.createEvidenceFile', 'its spec requires idempotency_key'],
+		['locations.list', 'it is a read'],
+		['orders.search', 'it is a read-only POST'],
+	])('retries %s: %s', async (operation) => {
+		expect(await strategyFor(serverError, operation)).toMatchObject({
+			maxRetries: 2,
 		});
-		expect(await strategyFor(error)).toEqual({ maxRetries: 0 });
-	});
-
-	it.each(['GET', 'PUT', 'DELETE'] as const)(
-		'retries a keyless %s',
-		async (method) => {
-			const error = await failureOf(503, serverError, { method });
-			expect(await strategyFor(error)).toMatchObject({ maxRetries: 2 });
-		},
-	);
-
-	it('retries a read-only POST such as a search', async () => {
-		const error = await failureOf(502, serverError, {
-			method: 'POST',
-			body: { query: {} },
-			readOnly: true,
+		expect(await strategyFor(dropped, operation)).toMatchObject({
+			maxRetries: 2,
 		});
-		expect(await strategyFor(error)).toMatchObject({ maxRetries: 2 });
 	});
 
-	it('retries a keyed POST after a timeout, and not a keyless one', async () => {
-		fetchMock.mockRejectedValue(new DOMException('timed out', 'TimeoutError'));
-		// unknown: a rejection can carry any value; the check below narrows it.
-		const keyedError = await makeSquareRequest('/v2/payments', 'tok', keyed)
-			.then(() => undefined)
-			.catch((e: unknown) => e);
-		const keylessError = await makeSquareRequest('/v2/payments', 'tok', keyless)
-			.then(() => undefined)
-			.catch((e: unknown) => e);
-		if (
-			!(keyedError instanceof SquareAPIError) ||
-			!(keylessError instanceof SquareAPIError)
-		) {
-			throw new Error('expected failures');
-		}
-		expect(keyedError.status).toBeUndefined();
-		expect(await strategyFor(keyedError)).toMatchObject({ maxRetries: 2 });
-		expect(await strategyFor(keylessError)).toEqual({ maxRetries: 0 });
+	it.each([
+		['customers.create', 'a keyless POST'],
+		['invoices.createAttachment', 'a POST whose key is optional'],
+		['customers.update', 'a PUT'],
+		['customers.delete', 'a DELETE'],
+		['payments.cancel', 'a destructive keyless POST'],
+	])('does not retry %s (%s): it may have run', async (operation) => {
+		expect(await strategyFor(serverError, operation)).toEqual({
+			maxRetries: 0,
+		});
+		expect(await strategyFor(dropped, operation)).toEqual({ maxRetries: 0 });
+	});
+
+	it('treats an operation it does not know as not replayable', async () => {
+		expect(await strategyFor(serverError, 'square.unknown')).toEqual({
+			maxRetries: 0,
+		});
 	});
 });
 
-describe('Square retry policy on a 429', () => {
-	it('retries a keyless mutating POST: it was rejected, not run', async () => {
-		const error = await failureOf(429, rateLimited, keyless);
-		expect(await strategyFor(error)).toMatchObject({
-			maxRetries: 3,
-			retryStrategy: 'exponential_backoff',
-		});
-	});
-
-	it('retries a keyed POST and a GET too', async () => {
-		const keyedError = await failureOf(429, rateLimited, keyed);
-		const getError = await failureOf(429, rateLimited, { method: 'GET' });
-		expect(await strategyFor(keyedError)).toMatchObject({ maxRetries: 3 });
-		expect(await strategyFor(getError)).toMatchObject({ maxRetries: 3 });
-	});
-
-	it('passes no Retry-After on, because Square’s OpenAPI spec lists none', async () => {
-		const error = await failureOf(429, rateLimited, keyless);
-		expect((await strategyFor(error)).headersRetryAfterMs).toBeUndefined();
-	});
-
-	it('honours a Retry-After when one is present', async () => {
-		const error = await failureOf(429, rateLimited, keyless, {
-			'Retry-After': '2',
-		});
-		expect((await strategyFor(error)).headersRetryAfterMs).toBe(2000);
+describe('Square 429', () => {
+	it('leaves the 429 to core’s request(), which has already retried it', async () => {
+		for (const operation of ['customers.create', 'locations.list']) {
+			expect(
+				await strategyFor(
+					apiError(429, {
+						errors: [{ category: 'RATE_LIMIT_ERROR', code: 'RATE_LIMITED' }],
+					}),
+					operation,
+				),
+			).toEqual({ maxRetries: 0 });
+		}
 	});
 });
 
 describe('Square errors that are never retried', () => {
 	it('treats a declined card as Square answering, not a fault', async () => {
-		const error = await failureOf(
-			402,
-			{
-				errors: [
-					{
-						category: 'PAYMENT_METHOD_ERROR',
-						code: 'CARD_DECLINED',
-						detail: 'Card declined.',
-					},
-				],
-			},
-			keyed,
-		);
-		expect(await strategyFor(error)).toEqual({ maxRetries: 0 });
+		const declined = apiError(402, {
+			errors: [
+				{
+					category: 'PAYMENT_METHOD_ERROR',
+					code: 'CARD_DECLINED',
+					detail: 'Card declined.',
+				},
+			],
+		});
+		expect(await strategyFor(declined, 'payments.create')).toEqual({
+			maxRetries: 0,
+		});
 	});
 
-	it('does not retry an expired or under-scoped token', async () => {
-		const error = await failureOf(
-			401,
-			{
-				errors: [
-					{
-						category: 'AUTHENTICATION_ERROR',
-						code: 'UNAUTHORIZED',
-					},
-				],
-			},
-			{ method: 'GET' },
-		);
-		expect(await strategyFor(error)).toEqual({ maxRetries: 0 });
+	it.each([401, 403])('does not retry a %i, even on a read', async (status) => {
+		expect(await strategyFor(apiError(status), 'locations.list')).toEqual({
+			maxRetries: 0,
+		});
 	});
 
 	it('does not retry a 400 on a keyed write', async () => {
-		const error = await failureOf(
-			400,
-			{
-				errors: [
-					{
-						category: 'INVALID_REQUEST_ERROR',
-						code: 'IDEMPOTENCY_KEY_REUSED',
-					},
-				],
-			},
-			keyed,
-		);
-		expect(await strategyFor(error)).toEqual({ maxRetries: 0 });
-	});
-});
-
-describe('Square idempotency_key pass-through', () => {
-	it('sends the caller key unchanged on every attempt', async () => {
-		fetchMock.mockImplementation(async () => jsonResponse(serverError, 500));
-		for (let attempt = 0; attempt < 3; attempt++) {
-			await makeSquareRequest('/v2/payments', 'tok', keyed).catch(
-				() => undefined,
-			);
-		}
-		const bodies = fetchMock.mock.calls.map(([, init]) =>
-			JSON.parse(String((init as RequestInit).body)),
-		);
-		expect(bodies).toHaveLength(3);
-		for (const body of bodies) {
-			expect(body.idempotency_key).toBe('order-17-charge');
-		}
-	});
-
-	it('never adds a key to a keyless request', async () => {
-		fetchMock.mockResolvedValueOnce(jsonResponse({ payment: {} }, 200));
-		await makeSquareRequest('/v2/payments', 'tok', keyless);
-		const [, init] = fetchMock.mock.calls[0] ?? [];
-		expect(JSON.parse(String((init as RequestInit).body))).toEqual(
-			keyless.body,
-		);
-	});
-
-	it('sends Square-Version and a Bearer token', async () => {
-		fetchMock.mockResolvedValueOnce(jsonResponse({ locations: [] }, 200));
-		await makeSquareRequest('/v2/locations', 'tok');
-		const [url, init] = fetchMock.mock.calls[0] ?? [];
-		expect(String(url)).toBe('https://connect.squareup.com/v2/locations');
-		const headers = new Headers((init as RequestInit).headers);
-		expect(headers.get('Authorization')).toBe('Bearer tok');
-		expect(headers.get('Square-Version')).toBe('2026-09-16');
-	});
-
-	it('uses the sandbox host for environment: sandbox', async () => {
-		fetchMock.mockResolvedValueOnce(jsonResponse({ locations: [] }, 200));
-		await makeSquareRequest('/v2/locations', 'tok', {
-			environment: 'sandbox',
+		const reused = apiError(400, {
+			errors: [
+				{ category: 'INVALID_REQUEST_ERROR', code: 'IDEMPOTENCY_KEY_REUSED' },
+			],
 		});
-		const [url] = fetchMock.mock.calls[0] ?? [];
-		expect(String(url)).toBe(
-			'https://connect.squareupsandbox.com/v2/locations',
+		expect(await strategyFor(reused, 'payments.create')).toEqual({
+			maxRetries: 0,
+		});
+	});
+
+	it('does not retry an error the plugin raised before sending', async () => {
+		expect(
+			await strategyFor(
+				new Error('file_base64 is not valid base64.'),
+				'disputes.createEvidenceFile',
+			),
+		).toEqual({ maxRetries: 0 });
+	});
+});
+
+describe('Square replayable operations', () => {
+	it('are the reads plus the operations whose spec requires idempotency_key', () => {
+		const reads = Object.entries(square().endpointMeta ?? {})
+			.filter(([, meta]) => meta.riskLevel === 'read')
+			.map(([op]) => op);
+		expect([...squareReplayableOperations].sort()).toEqual(
+			[
+				...reads,
+				'cards.create',
+				'catalog.upsert',
+				'disputes.createEvidenceFile',
+				'disputes.createEvidenceText',
+				'orders.pay',
+				'payments.cancelByIdempotencyKey',
+				'payments.create',
+				'payments.refund',
+				'payments.update',
+			].sort(),
 		);
 	});
 });
 
-describe('Square error messages', () => {
-	it('turns errors[] into one CODE: detail (field) line per entry', async () => {
-		const error = await failureOf(
-			400,
+describe('squareErrors', () => {
+	it('reads Square’s errors[] from an ApiError without changing it', () => {
+		const error = apiError(400, {
+			errors: [
+				{
+					category: 'INVALID_REQUEST_ERROR',
+					code: 'MISSING_REQUIRED_PARAMETER',
+					detail: "Missing required parameter 'source_id'.",
+					field: 'source_id',
+				},
+			],
+		});
+		expect(squareErrors(error)).toEqual([
 			{
-				errors: [
-					{
-						category: 'INVALID_REQUEST_ERROR',
-						code: 'MISSING_REQUIRED_PARAMETER',
-						detail: "Missing required parameter 'source_id'.",
-						field: 'source_id',
-					},
-					{ category: 'INVALID_REQUEST_ERROR', code: 'VALUE_TOO_LOW' },
-				],
+				category: 'INVALID_REQUEST_ERROR',
+				code: 'MISSING_REQUIRED_PARAMETER',
+				detail: "Missing required parameter 'source_id'.",
+				field: 'source_id',
 			},
-			keyed,
-		);
-		expect(error.message).toBe(
-			"MISSING_REQUIRED_PARAMETER: Missing required parameter 'source_id'. (source_id)\nVALUE_TOO_LOW",
-		);
+		]);
+		expect(error.message).toBe('Square said no');
+	});
+
+	it('returns no entries for a body that is not Square’s shape, or a non-ApiError', () => {
+		expect(squareErrors(apiError(502, '<html>Bad gateway</html>'))).toEqual([]);
+		expect(squareErrors(new Error('boom'))).toEqual([]);
+		expect(squareErrors(undefined)).toEqual([]);
 	});
 });

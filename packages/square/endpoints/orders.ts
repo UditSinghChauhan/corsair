@@ -13,7 +13,6 @@ export const calculate: SquareEndpoints['ordersCalculate'] = async (
 	const input = SquareEndpointInputSchemas.ordersCalculate.parse(rawInput);
 	return callSquare(ctx, '/v2/orders/calculate', {
 		method: 'POST',
-		readOnly: true,
 		body: input,
 		output: SquareEndpointOutputSchemas.ordersCalculate,
 		event: 'orders.calculate',
@@ -39,7 +38,6 @@ export const search: SquareEndpoints['ordersSearch'] = async (
 	const input = SquareEndpointInputSchemas.ordersSearch.parse(rawInput ?? {});
 	return callSquare(ctx, '/v2/orders/search', {
 		method: 'POST',
-		readOnly: true,
 		body: input,
 		output: SquareEndpointOutputSchemas.ordersSearch,
 		event: 'orders.search',

@@ -15,7 +15,6 @@ export const batchGet: SquareEndpoints['inventoryBatchGet'] = async (
 	);
 	return callSquare(ctx, '/v2/inventory/counts/batch-retrieve', {
 		method: 'POST',
-		readOnly: true,
 		body: input,
 		output: SquareEndpointOutputSchemas.inventoryBatchGet,
 		event: 'inventory.batchGet',

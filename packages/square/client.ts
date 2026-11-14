@@ -1,8 +1,4 @@
-import type {
-	ApiRequestOptions,
-	OpenAPIConfig,
-	RateLimitConfig,
-} from 'corsair/http';
+import type { ApiRequestOptions, OpenAPIConfig } from 'corsair/http';
 import { ApiError, request } from 'corsair/http';
 import { z } from 'zod';
 
@@ -18,17 +14,6 @@ export const SQUARE_BASE_URLS = {
 } as const;
 
 export type SquareEnvironment = keyof typeof SQUARE_BASE_URLS;
-
-// Retries are the error handlers' call (error-handlers.ts), so the transport
-// makes one attempt. Core's default would retry every 429 three times on its
-// own and stack with the handler's retries.
-const NO_TRANSPORT_RETRIES: RateLimitConfig = {
-	enabled: true,
-	maxRetries: 0,
-	initialRetryDelay: 0,
-	backoffMultiplier: 1,
-	headerNames: { retryAfter: 'retry-after' },
-};
 
 // Square error bodies are `{ errors: [{ category, code, detail?, field? }] }`.
 const SquareErrorBodySchema = z.object({
@@ -46,21 +31,31 @@ export type SquareErrorEntry = z.infer<
 	typeof SquareErrorBodySchema
 >['errors'][number];
 
-export class SquareAPIError extends Error {
-	constructor(
-		message: string,
-		public readonly status?: number,
-		public readonly retryAfter?: number,
-		// unknown: Square's raw error body, kept as received for the caller.
-		public readonly body?: unknown,
-		public readonly errors: SquareErrorEntry[] = [],
-		// True when sending the same request again after a 5xx or a timeout
-		// cannot repeat a side effect (see isRetrySafe). It does not govern 429s:
-		// those were rejected before running, so every method may be retried.
-		public readonly retrySafe: boolean = false,
-	) {
-		super(message);
-		this.name = 'SquareAPIError';
+/**
+ * Square's `errors[]` from a failed call: core's ApiError keeps Square's body
+ * as `body`, and its message is only the HTTP status text. Returns no entries
+ * for anything else, or for a body that is not in Square's shape. Reads the
+ * error; never changes it.
+ */
+// unknown: callers pass whatever a rejected call threw.
+export function squareErrors(error: unknown): SquareErrorEntry[] {
+	if (!(error instanceof ApiError)) return [];
+	const parsed = SquareErrorBodySchema.safeParse(error.body);
+	return parsed.success ? parsed.data.errors : [];
+}
+
+/**
+ * The request got no response from Square: the connection dropped or timed
+ * out. Square may or may not have run it. The original error is the `cause`.
+ */
+export class SquareNetworkError extends Error {
+	// unknown: whatever fetch rejected with (a TypeError, a DOMException, ...).
+	constructor(cause: unknown) {
+		super(
+			`Square request got no response: ${cause instanceof Error ? cause.message : String(cause)}`,
+			{ cause },
+		);
+		this.name = 'SquareNetworkError';
 	}
 }
 
@@ -77,36 +72,16 @@ export type SquareRequestOptions = {
 	path?: Record<string, string | number>;
 	query?: Record<string, QueryValue>;
 	environment?: SquareEnvironment;
-	// Set for read-only POSTs (search, calculate, bulk retrieve), which can be
-	// repeated safely even though they have no idempotency_key.
-	readOnly?: boolean;
 };
 
-// Whether a request may be sent again after a 5xx or a timeout, when the first
-// attempt may or may not have run. GET, PUT and DELETE are idempotent by
-// definition. A POST is safe only with the caller's idempotency_key (Square
-// returns the first result for a repeated key) or when it only reads. A keyless
-// mutating POST is never retried. The plugin never generates a key: the caller
-// supplies it and it is sent unchanged on every attempt, so a retry cannot
-// charge twice.
-function isRetrySafe(options: SquareRequestOptions): boolean {
-	const method = options.method ?? 'GET';
-	if (method === 'GET' || method === 'PUT' || method === 'DELETE') return true;
-	if (options.readOnly) return true;
-	const key = options.body?.idempotency_key;
-	return typeof key === 'string' && key.length > 0;
-}
-
-// One line per entry: `CODE: detail (field)`.
-function describeSquareErrors(errors: SquareErrorEntry[]): string {
-	return errors
-		.map(
-			(e) =>
-				`${e.code}${e.detail ? `: ${e.detail}` : ''}${e.field ? ` (${e.field})` : ''}`,
-		)
-		.join('\n');
-}
-
+/**
+ * Sends one request to Square. Core's request() retries a 429 up to three
+ * times and honours Retry-After; any other failure is thrown as core's
+ * ApiError, unchanged, so its status and retryAfter reach the error handlers
+ * and core. A request that got no response at all becomes a
+ * SquareNetworkError. Whether a 5xx or a network failure is retried is the
+ * error handlers' call (error-handlers.ts), by operation.
+ */
 export async function makeSquareRequest<T>(
 	endpoint: string,
 	token: string,
@@ -145,45 +120,11 @@ export async function makeSquareRequest<T>(
 				: {}),
 	};
 
-	const retrySafe = isRetrySafe(options);
-
 	try {
-		return await request<T>(config, requestOptions, {
-			rateLimitConfig: NO_TRANSPORT_RETRIES,
-		});
+		return await request<T>(config, requestOptions);
 	} catch (error) {
-		if (error instanceof ApiError) {
-			const parsed = SquareErrorBodySchema.safeParse(error.body);
-			const errors = parsed.success ? parsed.data.errors : [];
-			throw new SquareAPIError(
-				errors.length > 0 ? describeSquareErrors(errors) : error.message,
-				error.status,
-				error.retryAfter,
-				error.body,
-				errors,
-				retrySafe,
-			);
-		}
-		if (error instanceof Error) {
-			throw new SquareAPIError(
-				error.message,
-				undefined,
-				undefined,
-				undefined,
-				[],
-				retrySafe,
-			);
-		}
-		// A thrown value that is not an Error (for example a timeout DOMException
-		// from another realm) still gets the right retry flag.
-		throw new SquareAPIError(
-			'Unknown error',
-			undefined,
-			undefined,
-			undefined,
-			[],
-			retrySafe,
-		);
+		if (error instanceof ApiError) throw error;
+		throw new SquareNetworkError(error);
 	}
 }
 
@@ -212,7 +153,7 @@ export async function makeAuthenticatedSquareRequest<T>(
 		return await makeSquareRequest<T>(endpoint, auth.key, options);
 	} catch (error) {
 		if (
-			error instanceof SquareAPIError &&
+			error instanceof ApiError &&
 			error.status === 401 &&
 			auth._refreshAuth
 		) {

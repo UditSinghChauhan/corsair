@@ -49,7 +49,7 @@ import {
 	SquareEndpointInputSchemas as In,
 	SquareEndpointOutputSchemas as Out,
 } from './endpoints/types';
-import { errorHandlers } from './error-handlers';
+import { KEY_REQUIRED_OPERATIONS, squareErrorHandlers } from './error-handlers';
 import { SquareSchema } from './schema';
 
 export type SquarePluginOptions = {
@@ -699,7 +699,7 @@ export const squareEndpointMeta = {
 	'disputes.createEvidenceFile': {
 		riskLevel: 'write',
 		description:
-			'Uploads a file to use as evidence in a dispute challenge. The endpoint accepts HTTP multipart/form-data file uploads in HEIC, HEIF, JPEG, PDF, PNG, and TIFF formats.',
+			'Uploads a file to use as evidence in a dispute challenge. The endpoint accepts HTTP multipart/form-data file uploads in HEIC, HEIF, JPEG, PDF, PNG, and TIFF formats. Requires idempotency_key; pass the same key to retry safely.',
 	},
 	'disputes.createEvidenceText': {
 		riskLevel: 'write',
@@ -709,7 +709,7 @@ export const squareEndpointMeta = {
 	'invoices.createAttachment': {
 		riskLevel: 'write',
 		description:
-			'Uploads a file and attaches it to an invoice. This endpoint accepts HTTP multipart/form-data file uploads with a JSON `request` part and a `file` part.',
+			'Uploads a file and attaches it to an invoice. This endpoint accepts HTTP multipart/form-data file uploads with a JSON `request` part and a `file` part. Pass the same idempotency_key to retry safely.',
 	},
 	'locations.create': {
 		riskLevel: 'write',
@@ -1002,7 +1002,7 @@ export const squareEndpointMeta = {
 		description: "Submits evidence to the cardholder's bank. Cannot be undone.",
 	},
 	'webhookSubscriptions.test': {
-		riskLevel: 'write',
+		riskLevel: 'destructive',
 		description:
 			'Tests a webhook subscription by sending a test event to the notification URL.',
 	},
@@ -1070,7 +1070,7 @@ export const squareEndpointMeta = {
 			"Creates or updates a custom attribute for a merchant. Use this endpoint to set the value of a custom attribute for a specified merchant. Pass the same idempotency_key to retry safely. Beta in Square's API; it may change.",
 	},
 	'payments.create': {
-		riskLevel: 'write',
+		riskLevel: 'destructive',
 		description:
 			'Creates a payment using the provided source. customer_id is required if source_id is a card on file created with the Cards API. Moves money. Pass the same idempotency_key to retry safely.',
 	},
@@ -1079,12 +1079,12 @@ export const squareEndpointMeta = {
 		description: 'Retrieves details for a specific payment.',
 	},
 	'payments.update': {
-		riskLevel: 'write',
+		riskLevel: 'destructive',
 		description:
 			'Updates a payment with the APPROVED status. You can update the `amount_money` and `tip_money` using this endpoint. Moves money. Pass the same idempotency_key to retry safely.',
 	},
 	'payments.complete': {
-		riskLevel: 'write',
+		riskLevel: 'destructive',
 		description:
 			'Completes (captures) a payment. By default, payments are set to complete immediately after they are created. Moves money. Square takes no idempotency_key here; payments.get shows whether the payment is already completed before you repeat the call.',
 	},
@@ -1109,7 +1109,7 @@ export const squareEndpointMeta = {
 			"Creates a new order that can include information about products for purchase and settings to apply to the purchase. A fulfillment's pickup_details, shipment_details or in_store_details is required when its type is PICKUP, SHIPMENT or IN_STORE. A line item modifier's base_price_money is required for ad hoc modifiers. Pass the same idempotency_key to retry safely.",
 	},
 	'orders.pay': {
-		riskLevel: 'write',
+		riskLevel: 'destructive',
 		description:
 			"Pay for an order using one or more approved payments or settle an order with a total of `0`. Approved payments for the same order_id that are not listed in payment_ids are canceled. Moves money. Pass the same idempotency_key to retry safely. Beta in Square's API; it may change.",
 	},
@@ -1133,7 +1133,7 @@ export const squareEndpointMeta = {
 			'Creates a draft invoice for an order created using the Orders API. Give delivery_method (recommended) or the deprecated request_method on each payment request; the schema does not require delivery_method for that reason. Pass the same idempotency_key to retry safely.',
 	},
 	'invoices.publish': {
-		riskLevel: 'write',
+		riskLevel: 'destructive',
 		description:
 			"Publishes the specified draft invoice. Sends the invoice to the customer and may charge the card on file; cancel with invoices.cancel. Pass the invoice's current version; every committed change, including adding or removing an attachment, increments it. Read it with invoices.get. Moves money. Pass the same idempotency_key to retry safely.",
 	},
@@ -1225,6 +1225,21 @@ export const squareEndpointMeta = {
 			"Creates a merchant-related custom attribute definition for a Square seller account. Use this endpoint to define a custom attribute that can be associated with a merchant connecting to your application. The definition name is required if visibility is VISIBILITY_READ_ONLY or VISIBILITY_READ_WRITE_VALUES. Pass the same idempotency_key to retry safely. Beta in Square's API; it may change.",
 	},
 } as const satisfies RequiredPluginEndpointMeta<typeof squareEndpointsNested>;
+
+/**
+ * Operations the error handlers may send again after a 5xx or a dropped
+ * connection (R8): reads, and the operations whose spec requires an
+ * idempotency_key. Every other write may already have run, so it is not
+ * replayed.
+ */
+export const squareReplayableOperations: ReadonlySet<string> = new Set([
+	...Object.entries(squareEndpointMeta)
+		.filter(([, meta]) => meta.riskLevel === 'read')
+		.map(([operation]) => operation),
+	...KEY_REQUIRED_OPERATIONS,
+]);
+
+const errorHandlers = squareErrorHandlers(squareReplayableOperations);
 
 export const squareAuthConfig = {
 	api_key: {
@@ -1355,8 +1370,12 @@ export function square<const T extends SquarePluginOptions>(
 	} satisfies InternalSquarePlugin;
 }
 
-export type { SquareEnvironment } from './client';
-export { SQUARE_API_VERSION, SquareAPIError } from './client';
+export type { SquareEnvironment, SquareErrorEntry } from './client';
+export {
+	SQUARE_API_VERSION,
+	SquareNetworkError,
+	squareErrors,
+} from './client';
 export type {
 	SquareEndpointInputs,
 	SquareEndpointOutputs,

@@ -14,7 +14,6 @@ export const getTokenStatus: SquareEndpoints['oauthGetTokenStatus'] = async (
 	SquareEndpointInputSchemas.oauthGetTokenStatus.parse(rawInput ?? {});
 	return callSquare(ctx, '/oauth2/token/status', {
 		method: 'POST',
-		readOnly: true,
 		output: SquareEndpointOutputSchemas.oauthGetTokenStatus,
 		event: 'oauth.getTokenStatus',
 	});

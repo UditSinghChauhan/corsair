@@ -10,6 +10,10 @@ import { z } from 'zod';
 // unknown: Square types this object as free-form (no properties in the spec).
 const FreeForm = z.record(z.string(), z.unknown());
 
+// unknown: the spec gives these values no type (CustomAttribute.value), so they
+// are any JSON value. Square checks one against the attribute definition's schema.
+const JsonValue = z.json();
+
 // unknown: the spec points at these types but never defines them.
 const UnspecifiedObject = z.record(z.string(), z.unknown());
 
@@ -75,7 +79,7 @@ export const CustomAttributeDefinitionSchema = z.looseObject({
 
 export const CustomAttributeSchema = z.looseObject({
 	key: z.string().nullish(),
-	value: FreeForm.nullish(),
+	value: JsonValue.nullish(),
 	version: z.number().int().nullish(),
 	visibility: z.string().nullish(),
 	definition: CustomAttributeDefinitionSchema.nullish(),

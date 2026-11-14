@@ -266,7 +266,7 @@ describe('Square auth: OAuth refresh', () => {
 				.mockResolvedValueOnce(jsonResponse({ locations: [] }));
 
 			await expect(corsair.square.api.locations.list({})).rejects.toMatchObject(
-				{ name: 'SquareAPIError', status: 401 },
+				{ name: 'ApiError', status: 401 },
 			);
 
 			const calls = sent();
@@ -289,7 +289,7 @@ describe('Square auth: OAuth refresh', () => {
 				.mockResolvedValueOnce(jsonResponse({ locations: [] }));
 
 			await expect(corsair.square.api.locations.list({})).rejects.toMatchObject(
-				{ name: 'SquareAPIError', status: 401 },
+				{ name: 'ApiError', status: 401 },
 			);
 
 			const calls = sent();
@@ -316,6 +316,7 @@ describe('Square auth: a refused refresh', () => {
 			// A second Square request would take this.
 			.mockResolvedValueOnce(jsonResponse({ locations: [] }));
 		try {
+			// unknown: a rejection can carry any value; the callers narrow it.
 			const error: unknown = await corsair.square.api.locations.list({}).then(
 				() => undefined,
 				(e: unknown) => e,
@@ -392,7 +393,7 @@ describe('Square auth: API key', () => {
 			fetchMock.mockResolvedValue(jsonResponse(unauthorized, 401));
 
 			await expect(corsair.square.api.locations.list({})).rejects.toMatchObject(
-				{ name: 'SquareAPIError', status: 401 },
+				{ name: 'ApiError', status: 401 },
 			);
 
 			expect(sent()).toHaveLength(1);
